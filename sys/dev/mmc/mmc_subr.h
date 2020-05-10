@@ -63,7 +63,7 @@ int mmc_send_status(device_t busdev, device_t dev, uint16_t rca,
 int mmc_switch(device_t busdev, device_t dev, uint16_t rca, uint8_t set,
     uint8_t index, uint8_t value, u_int timeout, bool send_status);
 int mmc_switch_status(device_t busdev, device_t dev, uint16_t rca,
-    u_int timeout);
+    u_int timeout, bool ignore_badcrc);
 int mmc_wait_for_app_cmd(device_t busdev, device_t dev, uint16_t rca,
     struct mmc_command *cmd, int retries);
 int mmc_wait_for_cmd(device_t busdev, device_t dev, struct mmc_command *cmd,

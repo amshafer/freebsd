@@ -954,7 +954,9 @@ mmc_set_timing(struct mmc_softc *sc, struct mmc_ivars *ivar,
 		mmcbr_set_timing(sc->dev, timing);
 		mmcbr_update_ios(sc->dev);
 		err = mmc_switch_status(sc->dev, sc->dev, ivar->rca,
-		    ivar->cmd6_time);
+		    ivar->cmd6_time,
+		    /* ignore crc errors on HS200 */
+		    value == EXT_CSD_HS_TIMING_HS200 ? true : false);
 	}
 	return (err);
 }

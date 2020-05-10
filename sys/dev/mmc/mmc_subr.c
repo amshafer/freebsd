@@ -183,17 +183,25 @@ mmc_switch(device_t busdev, device_t dev, uint16_t rca, uint8_t set,
 	err = mmc_wait_for_cmd(busdev, dev, &cmd, CMD_RETRIES);
 	if (err != MMC_ERR_NONE || status == false)
 		goto out;
-	err = mmc_switch_status(busdev, dev, rca, timeout);
+	/*
+	 * Certain devices might generate BADCRC errors when
+	 * sending CMD13 after switching. This only seems to
+	 * happen with HS200, so we need to specify that we
+	 * would like to ignore these errors.
+	 */
+	err = mmc_switch_status(busdev, dev, rca, timeout,
+	    value == EXT_CSD_HS_TIMING_HS200 ? true : false);
 out:
 	sc->retune_paused--;
 	return (err);
 }
 
 int
-mmc_switch_status(device_t busdev, device_t dev, uint16_t rca, u_int timeout)
+mmc_switch_status(device_t busdev, device_t dev, uint16_t rca, u_int timeout,
+    bool ignore_badcrc)
 {
 	struct timeval cur, end;
-	int err;
+	int err, crc_timeout;
 	uint32_t status;
 
 	KASSERT(timeout != 0, ("%s: no timeout", __func__));
@@ -205,7 +213,19 @@ mmc_switch_status(device_t busdev, device_t dev, uint16_t rca, u_int timeout)
 	 */
 	end.tv_sec = end.tv_usec = 0;
 	for (;;) {
-		err = mmc_send_status(busdev, dev, rca, &status);
+		/* make sure that we don't loop indefinitely */
+		crc_timeout = 0;
+		do {
+			/*
+			 * Certain devices might generate BADCRC errors when
+			 * sending CMD13 after switching. This only seems to
+			 * happen with HS200, so we need to specify that we
+			 * would like to ignore these errors.
+			 */
+			err = mmc_send_status(busdev, dev, rca, &status);
+			crc_timeout++;
+		} while (ignore_badcrc && err == MMC_ERR_BADCRC
+		    && crc_timeout < 10);
 		if (err != MMC_ERR_NONE)
 			break;
 		if (R1_CURRENT_STATE(status) == R1_STATE_TRAN)
