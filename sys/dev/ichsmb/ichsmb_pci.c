@@ -90,6 +90,7 @@ __FBSDID("$FreeBSD$");
 #define	ID_PPT				0x1e22
 #define	ID_AVOTON			0x1f3c
 #define	ID_COLETOCRK			0x23B0
+#define ID_GEMINILAKE			0x31d4
 #define	ID_LPT				0x8c22
 #define	ID_LPTLP			0x9c22
 #define	ID_WCPT				0x8ca2
