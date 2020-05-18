@@ -90,6 +90,7 @@ __FBSDID("$FreeBSD$");
 #define	ID_PPT				0x1e22
 #define	ID_AVOTON			0x1f3c
 #define	ID_COLETOCRK			0x23B0
+#define ID_GEMINILAKE			0x31d4
 #define	ID_LPT				0x8c22
 #define	ID_LPTLP			0x9c22
 #define	ID_WCPT				0x8ca2
@@ -141,6 +142,7 @@ static const struct ichsmb_device {
 	{ ID_BAYTRAIL,	"Intel Baytrail SMBus controller"		},
 	{ ID_BRASWELL,	"Intel Braswell SMBus controller"		},
 	{ ID_COLETOCRK,	"Intel Coleto Creek SMBus controller"		},
+	{ ID_GEMINILAKE,"Intel Gemini Lake SMBus controller"		},
 	{ ID_WELLSBURG,	"Intel Wellsburg SMBus controller"		},
 	{ ID_SRPT,	"Intel Sunrise Point-H SMBus controller"	},
 	{ ID_SRPTLP,	"Intel Sunrise Point-LP SMBus controller"	},

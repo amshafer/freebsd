@@ -152,6 +152,9 @@ static const struct sdhci_device {
 	    SDHCI_QUIRK_MMC_DDR52 |
 	    SDHCI_QUIRK_CAPS_BIT63_FOR_MMC_HS400 |
 	    SDHCI_QUIRK_PRESET_VALUE_BROKEN },
+	{ 0x31cc8086,	0xffff, "Intel Gemini Lake SD Host Controller",
+	    SDHCI_QUIRK_PRESET_VALUE_BROKEN |
+	    SDHCI_QUIRK_CAPS_BIT63_FOR_MMC_HS400 },
 	{ 0,		0xffff,	NULL,
 	    0 }
 };
