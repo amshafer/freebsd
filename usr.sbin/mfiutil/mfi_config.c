@@ -1203,6 +1203,7 @@ dump_config(int fd, struct mfi_config_data *config, const char *msg_prefix)
 static int
 debug_config(int ac, char **av)
 {
+	printf("dump: %p\n", av);
 	struct mfi_config_data *config;
 	int error, fd;
 
@@ -1238,6 +1239,7 @@ MFI_COMMAND(top, debug, debug_config);
 static int
 dump(int ac, char **av)
 {
+	printf("dump: %p\n", av);
 	struct mfi_config_data *config;
 	char buf[64];
 	size_t len;
