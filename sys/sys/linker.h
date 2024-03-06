@@ -44,6 +44,12 @@ struct mod_depend;
  * Object representing a file which has been loaded by the linker.
  */
 typedef struct linker_file* linker_file_t;
+
+/*
+ * Special symbol which will be replaced by a reference to the linker_file_t
+ * of the module it is used in.
+ */
+extern linker_file_t __this_linker_file;
 typedef TAILQ_HEAD(, linker_file) linker_file_list_t;
 
 typedef caddr_t linker_sym_t;		/* opaque symbol */
