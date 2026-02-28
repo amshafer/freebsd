@@ -180,6 +180,7 @@ SUBDIR=	\
 	imgact_binmisc \
 	${_imx} \
 	${_intel_pmc} \
+	${_intel_idle} \
 	${_intelspi} \
 	${_io} \
 	${_ioat} \
@@ -833,6 +834,7 @@ _hyperv=	hyperv
 _ichwd=		ichwd
 _ida=		ida
 _intel_pmc=	intel_pmc
+_intel_idle=	intel_idle
 _intelspi=	intelspi
 _ips=		ips
 _isci=		isci
