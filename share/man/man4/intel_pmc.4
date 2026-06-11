@@ -1,0 +1,94 @@
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.\" Copyright (c) 2026 Abdelkader Boudih <freebsd@seuros.com>
+.\"
+.Dd May 21, 2026
+.Dt INTEL_PMC 4
+.Os
+.Sh NAME
+.Nm intel_pmc
+.Nd Intel PCH Power Management Controller driver
+.Sh SYNOPSIS
+.Cd "device intel_pmc"
+.Pp
+Alternatively, to load the driver as a
+module at boot time, place the following line in
+.Xr loader.conf 5 :
+.Bd -literal -offset indent
+intel_pmc_load="YES"
+.Ed
+.Sh DESCRIPTION
+The
+.Nm
+driver exposes sleep state residency counters and LTR block status
+for Intel Sunrise Point PCH (Platform Controller Hub) via
+.Xr sysctl 8 .
+.Pp
+The driver supports debugging S0ix (Modern Standby) power states by
+providing the cumulative time the system has spent in S0ix and
+identifying which IP blocks are preventing deeper sleep states.
+.Pp
+If firmware has locked access to the PMC registers, the driver detects
+this condition at attach time and reports it via the
+.Va access_denied
+sysctl.
+All register reads return zero when access is denied.
+.Sh HARDWARE
+The following Intel Platform Controller Hubs are supported by the
+.Nm
+driver:
+.Pp
+.Bl -bullet -compact
+.It
+Intel Sunrise Point-LP PMC (6th/7th Gen Core mobile, PCI ID 0x8086:0x9d21)
+.It
+Intel Sunrise Point-H PMC (6th/7th Gen Core desktop/server,
+PCI ID 0x8086:0xa121)
+.El
+.Sh SYSCTLS
+The following
+.Xr sysctl 8
+variables are available:
+.Bl -tag -width indent
+.It Va dev.intel_pmc.%d.access_denied
+Set to 1 if firmware has denied access to PMC registers.
+.It Va dev.intel_pmc.%d.ltr_ignore
+Latency Tolerance Reporting (LTR) ignore mask.
+Each bit corresponds to one IP block (bits 0-16).
+Setting a bit tells the PMC to ignore that IP's LTR requirements,
+allowing S0ix entry even if the IP would otherwise block it.
+A clear bit means the IP's requirements are considered and can
+prevent S0ix.
+.Pp
+Sunrise Point bit assignments:
+SOUTHPORT_A, SOUTHPORT_B, SATA, GIGABIT_ETHERNET, XHCI, reserved,
+ME, EVA, SOUTHPORT_C, HD_AUDIO, LPSS, SOUTHPORT_D, SOUTHPORT_E,
+CAMERA, ESPI, SCC, ISH.
+.It Va dev.intel_pmc.%d.slp_s0_residency
+Cumulative time in microseconds that the PCH has been in the deepest
+S0ix state (100\ us per counter step).
+The PCH enters this state when the CPU is in Package C10, PCH is in
+low power mode, ModPhy lanes are power-gated, and PLLs are idle.
+A value that never advances indicates S0ix transitions are not occurring.
+.Pp
+The counter is 32-bit and wraps after approximately 4.97 days of
+cumulative S0ix residency.
+.El
+.Sh SEE ALSO
+.Xr acpi 4 ,
+.Xr pci 4 ,
+.Xr sysctl 8
+.Pp
+Intel 100 Series Chipset Family PCH Datasheet, Volume 2, Section 4.3.
+.Sh HISTORY
+The
+.Nm
+driver first appeared in
+.Fx 16.0 .
+.Sh AUTHORS
+.An Abdelkader Boudih Aq Mt freebsd@seuros.com
+.Sh CAVEATS
+Only Sunrise Point PCH is supported.
+Other PCH generations (Cannon Point, Tiger Lake, etc.) have different
+register layouts and are not handled by this driver.
