@@ -258,6 +258,7 @@ SUBDIR=	\
 	mdio \
 	${_mgb} \
 	mem \
+	${_mei} \
 	mfi \
 	mii \
 	miiproxy \
@@ -881,6 +882,7 @@ _iavf=		iavf
 _ioat=		ioat
 _iwx=		iwx
 _ixl=		ixl
+_mei=		mei
 _nvdimm=	nvdimm
 _pms=		pms
 _pt=		pt
