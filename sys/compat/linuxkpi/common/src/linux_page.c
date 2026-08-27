@@ -335,6 +335,7 @@ struct vmmap {
 	LIST_ENTRY(vmmap)	vm_next;
 	void			*vm_addr;
 	unsigned long		vm_size;
+	vm_memattr_t		vm_attr;
 };
 
 struct vmmaphd {
@@ -363,7 +364,7 @@ is_vmalloc_addr(const void *addr)
 }
 
 static void
-vmmap_add(void *addr, unsigned long size)
+vmmap_add(void *addr, unsigned long size, vm_memattr_t attr)
 {
 	struct vmmap *vmmap;
 
@@ -371,6 +372,7 @@ vmmap_add(void *addr, unsigned long size)
 	mtx_lock(&vmmaplock);
 	vmmap->vm_size = size;
 	vmmap->vm_addr = addr;
+	vmmap->vm_attr = attr;
 	LIST_INSERT_HEAD(&vmmaphead[VM_HASH(addr)], vmmap, vm_next);
 	mtx_unlock(&vmmaplock);
 }
@@ -400,7 +402,7 @@ _ioremap_attr(vm_paddr_t phys_addr, unsigned long size, int attr)
 	addr = pmap_mapdev_attr(phys_addr, size, attr);
 	if (addr == NULL)
 		return (NULL);
-	vmmap_add(addr, size);
+	vmmap_add(addr, size, VM_MEMATTR_DEFAULT);
 
 	return (addr);
 }
@@ -423,6 +425,8 @@ iounmap(void *addr)
 void *
 vmap(struct page **pages, unsigned int count, unsigned long flags, int prot)
 {
+	vm_memattr_t attr;
+	unsigned int i;
 	void *off;
 	size_t size;
 
@@ -430,7 +434,27 @@ vmap(struct page **pages, unsigned int count, unsigned long flags, int prot)
 	off = kva_alloc(size);
 	if (off == NULL)
 		return (NULL);
-	vmmap_add(off, size);
+
+	/*
+	 * Linux callers use the prot argument to request uncacheable or
+	 * write-combining mappings for memory that is accessed by
+	 * non-coherent devices (e.g. pgprot_writecombine() for GPU
+	 * firmware buffers).  pmap_qenter() maps pages with their current
+	 * memattr, so the requested attribute must be applied to each
+	 * page first.  pmap_page_set_memattr() also updates the direct
+	 * map alias and flushes caches as needed.  The original attribute
+	 * is restored in vunmap() because pages must be returned to the
+	 * VM with VM_MEMATTR_DEFAULT.
+	 */
+	attr = pgprot2cachemode(prot);
+	if (attr != VM_MEMATTR_DEFAULT) {
+		for (i = 0; i < count; i++) {
+			if (pmap_page_get_memattr(pages[i]) != attr)
+				pmap_page_set_memattr(pages[i], attr);
+		}
+	}
+
+	vmmap_add(off, size, attr);
 	pmap_qenter(off, pages, count);
 
 	return (off);
@@ -453,7 +477,7 @@ linuxkpi_vmap_pfn(unsigned long *pfns, unsigned int count, int prot)
 	off = kva_alloc(size);
 	if (off == NULL)
 		return (NULL);
-	vmmap_add(off, size);
+	vmmap_add(off, size, VM_MEMATTR_DEFAULT);
 
 	chunk = MIN(count, VMAP_MAX_CHUNK_SIZE);
 	attr = pgprot2cachemode(prot);
@@ -496,11 +520,35 @@ void
 vunmap(void *addr)
 {
 	struct vmmap *vmmap;
+	vm_page_t m;
+	vm_paddr_t pa;
+	vm_offset_t va;
+	unsigned int i, count;
 
 	vmmap = vmmap_remove(addr);
 	if (vmmap == NULL)
 		return;
-	pmap_qremove(addr, vmmap->vm_size / PAGE_SIZE);
+	count = vmmap->vm_size / PAGE_SIZE;
+
+	/*
+	 * Restore the default memory attribute on pages that vmap()
+	 * remapped; pages must not be returned to the VM page allocator
+	 * with a non-default attribute (see vm_page_alloc_check()).
+	 */
+	if (vmmap->vm_attr != VM_MEMATTR_DEFAULT) {
+		va = (vm_offset_t)addr;
+		for (i = 0; i < count; i++) {
+			pa = pmap_extract(kernel_pmap, va + ptoa(i));
+			if (pa == 0)
+				continue;
+			m = PHYS_TO_VM_PAGE(pa);
+			if (m != NULL &&
+			    pmap_page_get_memattr(m) == vmmap->vm_attr)
+				pmap_page_set_memattr(m, VM_MEMATTR_DEFAULT);
+		}
+	}
+
+	pmap_qremove(addr, count);
 	kva_free(addr, vmmap->vm_size);
 	kfree(vmmap);
 }
