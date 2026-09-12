@@ -63,7 +63,20 @@ struct vmd_type {
 #define BUS_RESTRICT	1
 #define VECTOR_OFFSET	2
 #define CAN_BYPASS_MSI	4
+#define BIOS_PM_QUIRK	8	/* BIOS leaves LTR unprogrammed behind VMD */
 };
+
+/*
+ * Latency Tolerance Reporting extended capability registers, which
+ * pcireg.h does not define.  The two 16-bit ceilings share one dword.
+ */
+#define	VMD_LTR_MAX_LAT		0x4	/* snoop in 15:0, no-snoop in 31:16 */
+#define	VMD_LTR_LAT_MASK	0x1fff	/* value 9:0, scale 12:10 */
+/*
+ * Default LTR ceiling programmed where BIOS left zero: value 3, scale 4
+ * (1048576 ns), so 3145728 ns.  Same value the Linux vmd driver uses.
+ */
+#define	VMD_LTR_DEFAULT		0x1003
 
 #define VMD_CAP		0x40
 #define VMD_BUS_RESTRICT	0x1
@@ -106,12 +119,12 @@ SYSCTL_INT(_hw_vmd, OID_AUTO, max_msix, CTLFLAG_RWTUN, &vmd_max_msix, 0,
 static struct vmd_type vmd_devs[] = {
         { 0x8086, 0x201d, "Intel Volume Management Device", 0 },
         { 0x8086, 0x28c0, "Intel Volume Management Device", BUS_RESTRICT | CAN_BYPASS_MSI },
-        { 0x8086, 0x467f, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET },
-        { 0x8086, 0x4c3d, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET },
-        { 0x8086, 0x7d0b, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET },
-        { 0x8086, 0x9a0b, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET },
-        { 0x8086, 0xa77f, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET },
-        { 0x8086, 0xad0b, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET },
+        { 0x8086, 0x467f, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET | BIOS_PM_QUIRK },
+        { 0x8086, 0x4c3d, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET | BIOS_PM_QUIRK },
+        { 0x8086, 0x7d0b, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET | BIOS_PM_QUIRK },
+        { 0x8086, 0x9a0b, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET | BIOS_PM_QUIRK },
+        { 0x8086, 0xa77f, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET | BIOS_PM_QUIRK },
+        { 0x8086, 0xad0b, "Intel Volume Management Device", BUS_RESTRICT | VECTOR_OFFSET | BIOS_PM_QUIRK },
         { 0, 0, NULL, 0 }
 };
 
@@ -241,6 +254,53 @@ vmd_intr(void *arg)
 	 * handler to make PCI code setup and enable the MSI-X vector.
 	 */
 	return (FILTER_STRAY);
+}
+
+/*
+ * Devices behind VMD are hidden from the BIOS, so it never programs the
+ * Latency Tolerance Reporting ceilings in their LTR capability.  Left at
+ * their reset value of zero, those ceilings force each device to report a
+ * latency tolerance of zero, and the platform PMC then refuses every
+ * package C-state and S0ix, at runtime and across suspend.  This mirrors
+ * vmd_pm_enable_quirk() in the Linux vmd driver: where the snoop ceiling
+ * reads zero, program a generous default into both halves, and make sure
+ * LTR messages are actually enabled so the new value gets reported.
+ *
+ * Walks the whole tree below the VMD's pci bus, parents before children,
+ * so root ports are enabled before the endpoints behind them.  Only newbus
+ * children of a "pci" bus carry PCI ivars, everything else is skipped.
+ */
+static void
+vmd_pm_quirk_device(device_t vmd, device_t dev)
+{
+	device_t *children;
+	uint32_t val;
+	uint16_t ctl2;
+	int i, nchildren, off;
+
+	if (strcmp(device_get_name(device_get_parent(dev)), "pci") == 0) {
+		if (pci_find_extcap(dev, PCIZ_LTR, &off) == 0) {
+			val = pci_read_config(dev, off + VMD_LTR_MAX_LAT, 4);
+			if ((val & VMD_LTR_LAT_MASK) == 0) {
+				pci_write_config(dev, off + VMD_LTR_MAX_LAT,
+				    (VMD_LTR_DEFAULT << 16) | VMD_LTR_DEFAULT, 4);
+				device_printf(vmd, "%s: default LTR ceiling set\n",
+				    device_get_nameunit(dev));
+			}
+		}
+		if (pci_find_cap(dev, PCIY_EXPRESS, &off) == 0) {
+			ctl2 = pcie_read_config(dev, PCIER_DEVICE_CTL2, 2);
+			if ((ctl2 & PCIEM_CTL2_LTR_ENABLE) == 0)
+				pcie_write_config(dev, PCIER_DEVICE_CTL2,
+				    ctl2 | PCIEM_CTL2_LTR_ENABLE, 2);
+		}
+	}
+
+	if (device_get_children(dev, &children, &nchildren) != 0)
+		return;
+	for (i = 0; i < nchildren; i++)
+		vmd_pm_quirk_device(vmd, children[i]);
+	free(children, M_TEMP);
 }
 
 static int
@@ -385,6 +445,13 @@ vmd_attach(device_t dev)
 	sc->vmd_dma_tag = bus_get_dma_tag(dev);
 	sc->psc.child = device_add_child(dev, "pci", DEVICE_UNIT_ANY);
 	bus_attach_children(dev);
+
+	/*
+	 * Fix up power management state BIOS could not, now that everything
+	 * behind the VMD has been enumerated.
+	 */
+	if (t->flags & BIOS_PM_QUIRK)
+		vmd_pm_quirk_device(dev, sc->psc.child);
 	return (0);
 
 fail:
