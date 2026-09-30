@@ -114,6 +114,9 @@ static char *sysres_ids[] = { "PNP0C01", "PNP0C02", NULL };
 struct mtx	acpi_mutex;
 struct callout	acpi_sleep_timer;
 
+/* GpioInt mapping hook, installed by acpi_gpiobus(4).  See acpivar.h. */
+int (*acpi_gpio_map_interrupt)(ACPI_RESOURCE_GPIO *gpio_res, u_int *irq);
+
 /* Bitmap of device quirks. */
 int		acpi_quirks;
 

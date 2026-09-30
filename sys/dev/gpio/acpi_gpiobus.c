@@ -313,6 +313,54 @@ acpi_gpiobus_attach_aei(struct acpi_gpiobus_softc *sc, ACPI_HANDLE handle)
 	bus_attach_children(sc->super_sc.sc_busdev);
 }
 
+/*
+ * Back end for the acpi_gpio_map_interrupt hook (see acpivar.h): resolve
+ * a GpioInt descriptor to its controller device and ask the controller to
+ * map the pin as an x86 interrupt source via GPIO_MAP_INTR().  Lets
+ * GpioInt consumer buses (acpi_iicbus(4)) hand their children a plain
+ * SYS_RES_IRQ without linking against the GPIO code.
+ */
+static int
+acpi_gpiobus_map_interrupt(ACPI_RESOURCE_GPIO *gpio_res, u_int *irq)
+{
+	ACPI_HANDLE handle;
+	device_t controller;
+	uint32_t flags;
+
+	if (gpio_res->ConnectionType != ACPI_RESOURCE_GPIO_TYPE_INT ||
+	    gpio_res->PinTableLength < 1)
+		return (EINVAL);
+
+	if (ACPI_FAILURE(AcpiGetHandle(ACPI_ROOT_OBJECT,
+	    gpio_res->ResourceSource.StringPtr, &handle)))
+		return (ENOENT);
+
+	controller = acpi_get_device(handle);
+	if (controller == NULL)
+		return (ENODEV);
+
+	flags = acpi_gpiobus_convflags(gpio_res);
+	return (GPIO_MAP_INTR(controller, gpio_res->PinTable[0],
+	    flags & GPIO_INTR_MASK, irq));
+}
+
+static int
+acpi_gpiobus_modevent(module_t mod, int what, void *arg)
+{
+
+	switch (what) {
+	case MOD_LOAD:
+		acpi_gpio_map_interrupt = acpi_gpiobus_map_interrupt;
+		break;
+	case MOD_UNLOAD:
+		acpi_gpio_map_interrupt = NULL;
+		break;
+	default:
+		break;
+	}
+	return (0);
+}
+
 static int
 acpi_gpiobus_probe(device_t dev)
 {
@@ -460,7 +508,7 @@ static device_method_t acpi_gpiobus_methods[] = {
 
 DEFINE_CLASS_1(gpiobus, acpi_gpiobus_driver, acpi_gpiobus_methods,
     sizeof(struct acpi_gpiobus_softc), gpiobus_driver);
-EARLY_DRIVER_MODULE(acpi_gpiobus, gpio, acpi_gpiobus_driver, NULL, NULL,
-    BUS_PASS_BUS + BUS_PASS_ORDER_MIDDLE);
+EARLY_DRIVER_MODULE(acpi_gpiobus, gpio, acpi_gpiobus_driver,
+    acpi_gpiobus_modevent, NULL, BUS_PASS_BUS + BUS_PASS_ORDER_MIDDLE);
 MODULE_VERSION(acpi_gpiobus, 1);
 MODULE_DEPEND(acpi_gpiobus, acpi, 1, 1, 1);

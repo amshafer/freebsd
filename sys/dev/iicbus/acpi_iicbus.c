@@ -397,6 +397,7 @@ acpi_iicbus_parse_resources_cb(ACPI_RESOURCE *res, void *context)
 	device_t dev = context;
 	struct iicbus_ivar *super_devi = device_get_ivars(dev);
 	struct resource_list *rl = &super_devi->rl;
+	u_int gpio_irq;
 	int irq, gpio_pin;
 
 	switch(res->Type) {
@@ -412,10 +413,26 @@ acpi_iicbus_parse_resources_cb(ACPI_RESOURCE *res, void *context)
 	case ACPI_RESOURCE_TYPE_GPIO:
 		if (res->Data.Gpio.ConnectionType ==
 		    ACPI_RESOURCE_GPIO_TYPE_INT) {
-			/* Not supported by FreeBSD yet */
 			gpio_pin = res->Data.Gpio.PinTable[0];
-			if (bootverbose)
-				printf("  GPIO IRQ pin:      %d\n", gpio_pin);
+			/*
+			 * If a GPIO controller driver has registered the
+			 * mapping hook, route the pin to a per-pin
+			 * interrupt source and hand the child a regular
+			 * IRQ resource.  Otherwise leave the child without
+			 * an IRQ; iichid(4) and friends fall back to
+			 * polled operation.
+			 */
+			if (acpi_gpio_map_interrupt != NULL &&
+			    acpi_gpio_map_interrupt(&res->Data.Gpio,
+			    &gpio_irq) == 0) {
+				if (bootverbose)
+					printf("  GPIO IRQ pin:      %d"
+					    " (irq %u)\n", gpio_pin, gpio_irq);
+				resource_list_add_next(rl, SYS_RES_IRQ,
+				    gpio_irq, gpio_irq, 1);
+			} else if (bootverbose)
+				printf("  GPIO IRQ pin:      %d"
+				    " (no controller mapping)\n", gpio_pin);
 			return (AE_CTRL_TERMINATE);
 		}
 		break;

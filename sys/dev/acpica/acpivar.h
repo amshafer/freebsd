@@ -618,6 +618,15 @@ bus_get_cpus_t		acpi_get_cpus;
 extern int (*acpi_prepare_sleep)(uint8_t state, uint32_t a, uint32_t b,
     bool ext);
 
+/*
+ * Hook installed by acpi_gpiobus(4) to map an ACPI GpioInt resource to an
+ * IRQ number usable with SYS_RES_IRQ, on platforms where GPIO controllers
+ * register per-pin interrupt sources (see GPIO_MAP_INTR()).  NULL when no
+ * GPIO support is present; consumers must check before calling.
+ */
+extern int (*acpi_gpio_map_interrupt)(ACPI_RESOURCE_GPIO *gpio_res,
+    u_int *irq);
+
 static inline void
 acpi_set_prepare_sleep(
     int (*hook)(uint8_t state, uint32_t a, uint32_t b, bool ext))
