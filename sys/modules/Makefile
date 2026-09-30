@@ -76,6 +76,7 @@ SUBDIR=	\
 	${_adlngpio} \
 	${_bytgpio} \
 	${_chvgpio} \
+	${_mtlpgpio} \
 	cam \
 	${_cardbus} \
 	${_carp} \
@@ -856,6 +857,7 @@ _padlock_rng=	padlock_rng
 _rdrand_rng=	rdrand_rng
 _rdseed_rng=	rdseed_rng
 .endif
+_mtlpgpio=	mtlpgpio
 _pchtherm = pchtherm
 _s3=		s3
 _sdhci_acpi=	sdhci_acpi
