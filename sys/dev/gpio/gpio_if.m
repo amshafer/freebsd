@@ -211,3 +211,27 @@ METHOD int get_pin_list {
 	device_t dev;
 	uint32_t *pin_list;
 } DEFAULT gpio_default_get_pin_list;
+
+#
+# Map a pin to an interrupt source and return its IRQ number, suitable for
+# bus_alloc_resource(SYS_RES_IRQ) by a consumer.  Used on platforms without
+# INTRNG (x86) where the controller registers per-pin interrupt sources with
+# the MD interrupt code.  intr_mode is one of the GPIO_INTR_* trigger modes.
+# Mapping an already-mapped pin with the same mode returns the existing IRQ.
+#
+METHOD int map_intr {
+	device_t dev;
+	uint32_t pin_num;
+	uint32_t intr_mode;
+	u_int *irq;
+} DEFAULT gpio_default_nosupport;
+
+#
+# Release a mapping created by GPIO_MAP_INTR.  The pin's interrupt is
+# disabled; implementations may retain the IRQ number for later re-mapping
+# of the same pin.  Fails with EBUSY while a handler is still attached.
+#
+METHOD int unmap_intr {
+	device_t dev;
+	u_int irq;
+} DEFAULT gpio_default_nosupport;

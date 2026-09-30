@@ -115,12 +115,29 @@ gpio_alloc_intr_resource(device_t consumer_dev, int rid, u_int alloc_flags,
 	return (res);
 }
 #else
+/*
+ * Without INTRNG the controller itself owns the pin-to-IRQ mapping:
+ * GPIO_MAP_INTR() registers a per-pin interrupt source with the MD
+ * interrupt code (see intelgpio(4) on x86) and returns a plain IRQ
+ * number.  Controllers without such support inherit the EOPNOTSUPP
+ * default and this returns NULL, as before.
+ */
 struct resource *
 gpio_alloc_intr_resource(device_t consumer_dev, int rid, u_int alloc_flags,
     gpio_pin_t pin, uint32_t intr_mode)
 {
+	struct resource *res;
+	u_int irq;
 
-	return (NULL);
+	if (GPIO_MAP_INTR(pin->dev, pin->pin, intr_mode, &irq) != 0)
+		return (NULL);
+	res = bus_alloc_resource(consumer_dev, SYS_RES_IRQ, rid, irq, irq, 1,
+	    alloc_flags);
+	if (res == NULL) {
+		GPIO_UNMAP_INTR(pin->dev, irq);
+		return (NULL);
+	}
+	return (res);
 }
 #endif
 

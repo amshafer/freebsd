@@ -11,6 +11,9 @@
 #include <sys/bus.h>
 #include <sys/gpio.h>
 #include <sys/kernel.h>
+#include <sys/queue.h>
+
+#include <machine/intr_machdep.h>
 
 #include <contrib/dev/acpica/include/acpi.h>
 
@@ -23,6 +26,18 @@
 #define INTELGPIO_PADCFG0_GPIORXDIS   (1 << 9)
 #define INTELGPIO_PADCFG0_PMODE_MASK  (0x7 << 10)
 #define INTELGPIO_PADCFG0_PMODE_GPIO  0
+
+/* Pad interrupt routing/trigger configuration (PADCFG0). */
+#define INTELGPIO_PADCFG0_GPIROUTNMI	  (1 << 17)
+#define INTELGPIO_PADCFG0_GPIROUTSMI	  (1 << 18)
+#define INTELGPIO_PADCFG0_GPIROUTSCI	  (1 << 19)
+#define INTELGPIO_PADCFG0_GPIROUTIOXAPIC  (1 << 20)
+#define INTELGPIO_PADCFG0_RXINV		  (1 << 23)
+#define INTELGPIO_PADCFG0_RXEVCFG_MASK	  (0x3 << 25)
+#define INTELGPIO_PADCFG0_RXEVCFG_LEVEL	  (0x0 << 25)
+#define INTELGPIO_PADCFG0_RXEVCFG_EDGE	  (0x1 << 25)
+#define INTELGPIO_PADCFG0_RXEVCFG_DISABLED (0x2 << 25)
+#define INTELGPIO_PADCFG0_RXEVCFG_EDGE_BOTH (0x3 << 25)
 
 #define INTELGPIO_GPIO_NOMAP	      (-1)
 #define INTELGPIO_MAX_COMMUNITIES     8
@@ -44,7 +59,20 @@ struct intelgpio_platform {
 	int ncommunities;
 	char **hids;
 	const char *desc;
+	/*
+	 * Per-community register block offsets for interrupt support.
+	 * Each is the base of an array of one 32-bit register per pad
+	 * group (the group's GPI register index is its position in the
+	 * community's groups array).  A gpi_is of 0 means the platform
+	 * tables do not describe interrupt registers and GPIO_MAP_INTR
+	 * is unsupported.
+	 */
+	bus_size_t gpi_is;	/* GPI interrupt status (write-1-clear) */
+	bus_size_t gpi_ie;	/* GPI interrupt enable */
+	bus_size_t hostown;	/* HOSTSW_OWN: 1 = GPIO driver owns pad */
 };
+
+struct intelgpio_isrc;
 
 struct intelgpio_softc {
 	device_t sc_dev;
@@ -54,6 +82,13 @@ struct intelgpio_softc {
 
 	struct resource *sc_mem_res[INTELGPIO_MAX_COMMUNITIES];
 	uint32_t sc_padbar[INTELGPIO_MAX_COMMUNITIES];
+
+	/* Interrupt cascade state (unused when sc_plat->gpi_is == 0). */
+	struct pic sc_pic;
+	int sc_irq_rid;
+	struct resource *sc_irq_res;
+	void *sc_irq_ih;
+	SLIST_HEAD(, intelgpio_isrc) sc_isrcs;	/* sc_mtx */
 };
 
 DECLARE_CLASS(intelgpio_driver);

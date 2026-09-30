@@ -78,6 +78,9 @@ static const struct intelgpio_platform mtlp_platform = {
 	.ncommunities = nitems(mtlp_communities),
 	.hids = mtlp_hids,
 	.desc = "Intel Meteor Lake-P GPIO",
+	.gpi_is = 0x200,
+	.gpi_ie = 0x210,
+	.hostown = 0x140,
 };
 
 static int
