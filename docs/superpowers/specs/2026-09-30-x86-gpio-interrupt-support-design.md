@@ -2,7 +2,7 @@
 
 Date: 2026-09-30
 Status: Draft for review
-Target: FreeBSD 16-CURRENT, upstreamable via Phabricator in two commits
+Target: FreeBSD 16-CURRENT, upstreamable via Phabricator in four commits
 
 ## Problem statement
 
@@ -71,16 +71,13 @@ The mechanism follows two existing x86 precedents: MSI (boot-reserved
 dynamic IRQ number range) and Xen event channels (software-demuxed cascade
 dispatching via `intr_execute_handlers()`).
 
-Four design layers, delivered as two commits:
+Four layers, each an independently reviewable commit:
 
-- Commit 1 (layer D2): MTL community/pad tables for intelgpio.
-- Commit 2 (layers D1, D3, D4): GPIO interrupt support end to end —
-  reserved GPIO IRQ range in `intr_machdep.c`, intelgpio as cascaded PIC
-  + `GPIO_MAP_INTR` interface + non-INTRNG `gpio_alloc_intr_resource()`,
-  and acpi_iicbus GpioInt -> IRQ resource mapping.
-
-The D1/D3/D4 layer names below remain as design vocabulary; they describe
-components of commit 2, not separate commits.
+- D1: MD layer — reserved GPIO IRQ range in `intr_machdep.c`.
+- D2: MTL community/pad tables for intelgpio.
+- D3: intelgpio as cascaded PIC + `GPIO_MAP_INTR` interface + non-INTRNG
+  `gpio_alloc_intr_resource()`.
+- D4: acpi_iicbus GpioInt -> IRQ resource mapping.
 
 ## D1: MD layer (sys/x86/x86/intr_machdep.c)
 
@@ -252,17 +249,25 @@ No new failure mode is worse than current behavior.
 
 ## Commit plan
 
-- Commit 1 — `gpio: intelgpio: add Meteor Lake-P support`. The D2 tables
-  only. Independently landable and useful on its own (gpioc/gpioctl pad
-  access on MTL); no interrupt code, no MD changes.
-- Commit 2 — `x86/gpio: GPIO interrupt support for ACPI GpioInt consumers
-  (iichid)`. Layers D1 + D3 + D4 together: the intr_machdep IRQ range,
-  intelgpio PIC/demux + GPIO_MAP_INTR + the non-INTRNG
-  gpio_alloc_intr_resource(), and the acpi_iicbus GpioInt mapping.
-  Reviewed as one Phabricator revision so the mechanism is judged with
-  its first real consumer attached; removes wulf@'s long-standing
-  "sampling mode" limitation for MTL laptops. Reviewers: x86 interrupt
-  maintainers plus wulf@ for the iichid-facing behavior.
+Four commits, one per layer, each independently reviewable:
+
+- Commit 1 (D1) — `x86: reserve a dynamic IRQ range for GPIO interrupt
+  sources`. intr_machdep.c range + allocator. Reviewers: x86 interrupt
+  maintainers.
+- Commit 2 (D2) — `gpio: intelgpio: add Meteor Lake-P support`. Tables
+  only; independently landable and useful without the other commits
+  (gpioc/gpioctl pad access on MTL).
+- Commit 3 (D3) — `gpio: intelgpio: interrupt support via x86 intsrc
+  cascade`. PIC/demux, GPIO_MAP_INTR/GPIO_UNMAP_INTR, and the non-INTRNG
+  gpio_alloc_intr_resource(). Depends on commits 1 and 2; also enables
+  gpio_aei(4)/gpiokeys(4) on amd64.
+- Commit 4 (D4) — `acpi_iicbus: map GpioInt resources to interrupts`.
+  Depends on commit 3; first end-user consumer (iichid leaves sampling
+  mode); removes wulf@'s long-standing limitation. Reviewer: wulf@.
+
+Submit the series as stacked Phabricator revisions so the mechanism
+(commits 1 and 3) is reviewed alongside its first real consumer
+(commit 4).
 
 Follow-up (out of scope, enabled by this work): remove the hmt(4)
 zero-length-packet workaround once sampling is rare; bytgpio/chvgpio
