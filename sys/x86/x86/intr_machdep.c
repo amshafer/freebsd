@@ -38,10 +38,12 @@
 #include "opt_smp.h"
 
 #include <sys/param.h>
+#include <sys/bitstring.h>
 #include <sys/bus.h>
 #include <sys/interrupt.h>
 #include <sys/ktr.h>
 #include <sys/kernel.h>
+#include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
@@ -101,6 +103,89 @@ size_t sintrnames = sizeof(intrnames);
 int nintrcnt;
 
 static MALLOC_DEFINE(M_INTR, "intr", "Interrupt Sources");
+
+/*
+ * Dynamic IRQ range for GPIO controller drivers acting as cascaded
+ * interrupt controllers (e.g. intelgpio(4) delivering ACPI GpioInt
+ * interrupts).  Reserved at interrupt-init time like the MSI range;
+ * numbers are handed out by gpio_irq_alloc() when a driver maps a pin.
+ */
+u_int first_gpio_irq;
+SYSCTL_UINT(_machdep, OID_AUTO, first_gpio_irq, CTLFLAG_RD,
+    &first_gpio_irq, 0, "Number of first IRQ reserved for GPIO interrupts");
+
+#define	GPIO_IRQS_DEFAULT	64
+#define	GPIO_IRQS_MAX		512
+
+u_int num_gpio_irqs = GPIO_IRQS_DEFAULT;
+SYSCTL_UINT(_machdep, OID_AUTO, num_gpio_irqs, CTLFLAG_RDTUN,
+    &num_gpio_irqs, 0, "Number of IRQs reserved for GPIO interrupts");
+
+static struct mtx gpio_irq_mtx;
+static bitstr_t *gpio_irq_bits;	/* lazily allocated, gpio_irq_mtx */
+
+/*
+ * Called from apic_setup_io() right after msi_init(), once num_io_irqs
+ * reflects the MSI range, and before intr_init_sources() sizes
+ * interrupt_sources[] from num_io_irqs.
+ */
+void
+gpio_irq_init(void)
+{
+
+	if (num_gpio_irqs == 0)
+		return;
+	if (num_gpio_irqs > GPIO_IRQS_MAX)
+		num_gpio_irqs = GPIO_IRQS_MAX;
+	first_gpio_irq = num_io_irqs;
+	if (num_gpio_irqs > UINT_MAX - first_gpio_irq)
+		panic("num_gpio_irqs too high");
+	num_io_irqs = first_gpio_irq + num_gpio_irqs;
+	mtx_init(&gpio_irq_mtx, "gpioirq", NULL, MTX_DEF);
+}
+
+/*
+ * Allocate a GPIO IRQ.  M_WAITOK is safe here: callers are driver
+ * attach/map paths, never interrupt context.
+ */
+int
+gpio_irq_alloc(u_int *irqp)
+{
+	bitstr_t *bits;
+	int bit;
+
+	if (num_gpio_irqs == 0 || first_gpio_irq == 0)
+		return (ENXIO);
+	/* Allocate before taking the mutex; bit_alloc may sleep. */
+	bits = bit_alloc(num_gpio_irqs, M_INTR, M_WAITOK | M_ZERO);
+	mtx_lock(&gpio_irq_mtx);
+	if (gpio_irq_bits == NULL) {
+		gpio_irq_bits = bits;
+		bits = NULL;
+	}
+	bit_ffc(gpio_irq_bits, num_gpio_irqs, &bit);
+	if (bit == -1) {
+		mtx_unlock(&gpio_irq_mtx);
+		free(bits, M_INTR);
+		return (ENOSPC);
+	}
+	bit_set(gpio_irq_bits, bit);
+	mtx_unlock(&gpio_irq_mtx);
+	free(bits, M_INTR);
+	*irqp = first_gpio_irq + bit;
+	return (0);
+}
+
+void
+gpio_irq_release(u_int irq)
+{
+
+	KASSERT(irq >= first_gpio_irq && irq < first_gpio_irq + num_gpio_irqs,
+	    ("%s: irq %u outside GPIO range", __func__, irq));
+	mtx_lock(&gpio_irq_mtx);
+	bit_clear(gpio_irq_bits, irq - first_gpio_irq);
+	mtx_unlock(&gpio_irq_mtx);
+}
 
 static int	intr_assign_cpu(void *arg, int cpu);
 static void	intr_disable_src(void *arg);

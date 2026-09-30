@@ -56,6 +56,8 @@
 extern u_int first_msi_irq;
 extern u_int num_io_irqs;
 extern u_int num_msi_irqs;
+extern u_int first_gpio_irq;
+extern u_int num_gpio_irqs;
 
 /*
  * Default base address for MSI messages on x86 platforms.
@@ -155,6 +157,9 @@ void	intr_enable_src(u_int irq);
 void	intr_reprogram(void);
 void	intrcnt_add(const char *name, u_long **countp);
 void	nexus_add_irq(u_long irq);
+int	gpio_irq_alloc(u_int *irqp);
+void	gpio_irq_init(void);
+void	gpio_irq_release(u_int irq);
 int	msi_alloc(device_t dev, int count, int maxcount, int *irqs);
 void	msi_init(void);
 int	msi_map(int irq, uint64_t *addr, uint32_t *data);
