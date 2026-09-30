@@ -2,7 +2,7 @@
 
 Date: 2026-09-30
 Status: Draft for review
-Target: FreeBSD 16-CURRENT, upstreamable via Phabricator in four slices
+Target: FreeBSD 16-CURRENT, upstreamable via Phabricator in two commits
 
 ## Problem statement
 
@@ -71,13 +71,16 @@ The mechanism follows two existing x86 precedents: MSI (boot-reserved
 dynamic IRQ number range) and Xen event channels (software-demuxed cascade
 dispatching via `intr_execute_handlers()`).
 
-Four layers, each an independently reviewable commit:
+Four design layers, delivered as two commits:
 
-- D1: MD layer — reserved GPIO IRQ range in `intr_machdep.c`.
-- D2: MTL community/pad tables for intelgpio.
-- D3: intelgpio as cascaded PIC + `GPIO_MAP_INTR` interface + non-INTRNG
-  `gpio_alloc_intr_resource()`.
-- D4: acpi_iicbus GpioInt -> IRQ resource mapping.
+- Commit 1 (layer D2): MTL community/pad tables for intelgpio.
+- Commit 2 (layers D1, D3, D4): GPIO interrupt support end to end —
+  reserved GPIO IRQ range in `intr_machdep.c`, intelgpio as cascaded PIC
+  + `GPIO_MAP_INTR` interface + non-INTRNG `gpio_alloc_intr_resource()`,
+  and acpi_iicbus GpioInt -> IRQ resource mapping.
+
+The D1/D3/D4 layer names below remain as design vocabulary; they describe
+components of commit 2, not separate commits.
 
 ## D1: MD layer (sys/x86/x86/intr_machdep.c)
 
@@ -247,13 +250,19 @@ No new failure mode is worse than current behavior.
 - Regression: a machine (or VM) without GpioInt devices boots and behaves
   identically.
 
-## Upstream slicing
+## Commit plan
 
-- D1 (intr_machdep range) — reviewers: x86 interrupt maintainers.
-- D2 (MTL tables) — independently landable, useful without D1/D3/D4.
-- D3 (intelgpio PIC + GPIO_MAP_INTR + gpio_alloc_intr_resource) — depends
-  on D1, D2.
-- D4 (acpi_iicbus) — depends on D3; removes wulf@'s long-standing comment.
+- Commit 1 — `gpio: intelgpio: add Meteor Lake-P support`. The D2 tables
+  only. Independently landable and useful on its own (gpioc/gpioctl pad
+  access on MTL); no interrupt code, no MD changes.
+- Commit 2 — `x86/gpio: GPIO interrupt support for ACPI GpioInt consumers
+  (iichid)`. Layers D1 + D3 + D4 together: the intr_machdep IRQ range,
+  intelgpio PIC/demux + GPIO_MAP_INTR + the non-INTRNG
+  gpio_alloc_intr_resource(), and the acpi_iicbus GpioInt mapping.
+  Reviewed as one Phabricator revision so the mechanism is judged with
+  its first real consumer attached; removes wulf@'s long-standing
+  "sampling mode" limitation for MTL laptops. Reviewers: x86 interrupt
+  maintainers plus wulf@ for the iichid-facing behavior.
 
 Follow-up (out of scope, enabled by this work): remove the hmt(4)
 zero-length-packet workaround once sampling is rare; bytgpio/chvgpio
