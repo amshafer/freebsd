@@ -3794,6 +3794,18 @@ acpi_EnterSleepState(struct acpi_softc *sc, enum power_stype stype)
     if (sc->acpi_sleep_delay > 0)
 	DELAY(sc->acpi_sleep_delay * 1000000);
 
+    /*
+     * For suspend-to-idle every CPU sits in its idle loop until a wake
+     * event. acpi_cpu_idle picks a C-state from the recent sleep durations,
+     * and after the burst of short idles during device suspend that can
+     * leave CPUs parked in a shallow state for the whole sleep, which keeps
+     * the package out of its deepest C-state. Force the deepest state before
+     * suspendclock() so the APs pick it up when its IPI sends them back into
+     * idle.
+     */
+    if (stype == POWER_STYPE_SUSPEND_TO_IDLE)
+	acpi_cpu_force_cx_lowest = 1;
+
     suspendclock();
     intr = intr_disable();
     switch (stype) {
@@ -3815,6 +3827,7 @@ acpi_EnterSleepState(struct acpi_softc *sc, enum power_stype stype)
 	__unreachable();
     }
     resumeclock();
+    acpi_cpu_force_cx_lowest = 0;
 
     /*
      * Back out state according to how far along we got in the suspend

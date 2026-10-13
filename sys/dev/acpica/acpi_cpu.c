@@ -150,6 +150,15 @@ static struct sysctl_ctx_list cpu_sysctl_ctx;
 static struct sysctl_oid *cpu_sysctl_tree;
 static int		 cpu_cx_generic;
 static int		 cpu_cx_lowest_lim;
+
+/*
+ * When set, acpi_cpu_idle enters the deepest permitted C-state without
+ * consulting the sleep duration heuristic. This is used during
+ * suspend-to-idle, where every CPU parks in idle until a wake event and
+ * the heuristic would otherwise leave some of them in a shallow state for
+ * the whole sleep.
+ */
+int			 acpi_cpu_force_cx_lowest;
 #if defined(__i386__) || defined(__amd64__)
 static bool		 cppc_notify;
 #endif
@@ -1180,10 +1189,19 @@ acpi_cpu_idle(sbintime_t sbt)
 	i = min(sc->cpu_cx_lowest, sc->cpu_non_c3);
     else
 	i = sc->cpu_cx_lowest;
-    for (; i >= 0; i--) {
-	if (sc->cpu_cx_states[i].trans_lat * 3 <= us) {
-	    cx_next_idx = i;
-	    break;
+    if (acpi_cpu_force_cx_lowest) {
+	/*
+	 * We are parking for suspend-to-idle. The expected sleep is the
+	 * entire suspend so the latency of the deepest state is always
+	 * acceptable.
+	 */
+	cx_next_idx = i;
+    } else {
+	for (; i >= 0; i--) {
+	    if (sc->cpu_cx_states[i].trans_lat * 3 <= us) {
+		cx_next_idx = i;
+		break;
+	    }
 	}
     }
 
