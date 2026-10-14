@@ -958,8 +958,29 @@ lkpi_sta_sync_from_ni(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	    updchnctx, rc_changed, (uintmax_t)bss_changed,
 	    sta->deflink.bandwidth, sta->deflink.rx_nss);
 
-	if (rc_changed != 0)
-		lkpi_80211_mo_link_sta_rc_update(hw, vif, &sta->deflink, rc_changed);
+	/*
+	 * Only pass rate control changes down to the driver once it knows
+	 * about the sta. When called from lkpi_lsta_alloc() the sta has not
+	 * gone through (*sta_state) yet, so the driver has no state for it,
+	 * and we are also called without the wiphy lock. Drivers (iwlwifi
+	 * mld at least) assert the wiphy lock and look up their own per-sta
+	 * state in (*link_sta_rc_update), so calling it here panics.
+	 * The sync in lkpi_sta_assoc_to_run() runs with the lock held and
+	 * after the sta was added, and will report the changes then.
+	 */
+	if (rc_changed != 0) {
+		struct lkpi_sta *lsta;
+
+		lsta = STA_TO_LSTA(sta);
+		if (lsta->added_to_drv) {
+			lockdep_assert_wiphy(hw->wiphy);
+			lkpi_80211_mo_link_sta_rc_update(hw, vif, &sta->deflink,
+			    rc_changed);
+		} else {
+			TRACE_RATES("sta not added to driver, skipping "
+			    "rc_update %#010x", rc_changed);
+		}
+	}
 
 	return (bss_changed);
 }
