@@ -332,10 +332,24 @@ lkpi_get_user_pages(unsigned long start, unsigned long nr_pages,
  * need to be particularly large.  This is done because we must store the
  * caller's idea of the map size to properly unmap.
  */
+/*
+ * vmap() owns a cache-attribute reference for each page it maps.  Compatible
+ * overlapping vmaps must keep that attribute until their last unmap.  The
+ * caller continues to own the page lifetime, as required by the vmap API.
+ */
+struct vmmap_attr {
+	LIST_ENTRY(vmmap_attr) link;
+	vm_page_t page;
+	unsigned int refs;
+	vm_memattr_t attr;
+	vm_memattr_t saved_attr;
+};
+
 struct vmmap {
 	LIST_ENTRY(vmmap)	vm_next;
 	void			*vm_addr;
 	unsigned long		vm_size;
+	struct vmmap_attr	**vm_attrs;
 };
 
 struct vmmaphd {
@@ -346,6 +360,92 @@ struct vmmaphd {
 #define VM_HASH(addr)   ((uintptr_t)(addr) >> PAGE_SHIFT) & VMMAP_HASH_MASK
 static struct vmmaphd vmmaphead[VMMAP_HASH_SIZE];
 static struct mtx vmmaplock;
+#define VMMAP_ATTR_HASH_SIZE 1024
+static struct {
+	struct vmmap_attr *lh_first;
+} vmmap_attrs[VMMAP_ATTR_HASH_SIZE];
+#define VMMAP_ATTR_HASH(m) \
+	(atop(VM_PAGE_TO_PHYS(m)) & (VMMAP_ATTR_HASH_SIZE - 1))
+
+static struct vmmap_attr *
+vmmap_attr_find(vm_page_t page)
+{
+	struct vmmap_attr *a;
+
+	mtx_assert(&vmmaplock, MA_OWNED);
+	LIST_FOREACH(a, &vmmap_attrs[VMMAP_ATTR_HASH(page)], link) {
+		if (a->page == page)
+			return (a);
+	}
+	return (NULL);
+}
+
+static void
+vmmap_attr_put(struct vmmap_attr *a)
+{
+	vm_page_t page;
+
+	mtx_assert(&vmmaplock, MA_OWNED);
+	MPASS(a->refs != 0);
+	if (--a->refs != 0)
+		return;
+	page = a->page;
+	/* The kernel PTEs must have been removed before changing the DMAP. */
+	if (a->saved_attr != a->attr &&
+	    pmap_page_get_memattr(page) == a->attr &&
+	    !pmap_page_is_mapped(page))
+		pmap_page_set_memattr(page, a->saved_attr);
+	LIST_REMOVE(a, link);
+	kfree(a);
+}
+
+static bool
+vmmap_attr_get_pages(struct page **pages, unsigned int count, int prot,
+    struct vmmap_attr **attrs)
+{
+	struct vmmap_attr *a;
+	vm_memattr_t attr, requested;
+	unsigned int i;
+
+	requested = pgprot2cachemode(prot);
+	mtx_lock(&vmmaplock);
+	for (i = 0; i < count; i++) {
+		/* Default mappings retain a page's existing cache attribute. */
+		attr = requested == VM_MEMATTR_DEFAULT ?
+		    pmap_page_get_memattr(pages[i]) : requested;
+		a = vmmap_attr_find(pages[i]);
+		if (a != NULL) {
+			if (a->attr != attr || a->refs == UINT_MAX)
+				goto fail;
+			a->refs++;
+		} else {
+			/* Do not create conflicting aliases of existing mappings. */
+			if (pmap_page_get_memattr(pages[i]) != attr &&
+			    (pages[i]->object == kernel_object ||
+			    pmap_page_is_mapped(pages[i])))
+				goto fail;
+			a = kmalloc(sizeof(*a), GFP_ATOMIC);
+			if (a == NULL)
+				goto fail;
+			a->page = pages[i];
+			a->refs = 1;
+			a->attr = attr;
+			a->saved_attr = pmap_page_get_memattr(pages[i]);
+			LIST_INSERT_HEAD(&vmmap_attrs[VMMAP_ATTR_HASH(pages[i])],
+			    a, link);
+			if (a->saved_attr != attr)
+				pmap_page_set_memattr(pages[i], attr);
+		}
+		attrs[i] = a;
+	}
+	mtx_unlock(&vmmaplock);
+	return (true);
+fail:
+	while (i != 0)
+		vmmap_attr_put(attrs[--i]);
+	mtx_unlock(&vmmaplock);
+	return (false);
+}
 
 int
 is_vmalloc_addr(const void *addr)
@@ -363,7 +463,7 @@ is_vmalloc_addr(const void *addr)
 	return (vtoslab((vm_offset_t)addr & ~UMA_SLAB_MASK) != NULL);
 }
 
-static void
+static struct vmmap *
 vmmap_add(void *addr, unsigned long size)
 {
 	struct vmmap *vmmap;
@@ -372,8 +472,10 @@ vmmap_add(void *addr, unsigned long size)
 	mtx_lock(&vmmaplock);
 	vmmap->vm_size = size;
 	vmmap->vm_addr = addr;
+	vmmap->vm_attrs = NULL;
 	LIST_INSERT_HEAD(&vmmaphead[VM_HASH(addr)], vmmap, vm_next);
 	mtx_unlock(&vmmaplock);
+	return (vmmap);
 }
 
 static struct vmmap *
@@ -453,17 +555,36 @@ linuxkpi_devm_memremap(struct device *dev, resource_size_t offset, size_t size,
 void *
 vmap(struct page **pages, unsigned int count, unsigned long flags, int prot)
 {
+	struct vmmap_attr **attrs;
+	struct vmmap *vmmap;
 	void *off;
 	size_t size;
 
-	size = count * PAGE_SIZE;
+	size = (size_t)count * PAGE_SIZE;
+	if (count == 0 || size / PAGE_SIZE != count)
+		return (NULL);
 	off = kva_alloc(size);
 	if (off == NULL)
 		return (NULL);
-	vmmap_add(off, size);
-	pmap_qenter(off, pages, count);
+	attrs = kcalloc(count, sizeof(*attrs), GFP_KERNEL);
+	if (attrs == NULL)
+		goto fail;
 
+	/*
+	 * pmap_qenter() uses each page's memattr, not the prot argument.
+	 * Apply the requested attribute before installing kernel PTEs;
+	 * pmap_page_set_memattr() also maintains the direct-map alias.
+	 */
+	if (!vmmap_attr_get_pages(pages, count, prot, attrs))
+		goto fail;
+	pmap_qenter(off, pages, count);
+	vmmap = vmmap_add(off, size);
+	vmmap->vm_attrs = attrs;
 	return (off);
+fail:
+	kfree(attrs);
+	kva_free(off, size);
+	return (NULL);
 }
 
 #define	VMAP_MAX_CHUNK_SIZE (65536U / sizeof(struct vm_page)) /* KMEM_ZMAX */
@@ -526,11 +647,21 @@ void
 vunmap(void *addr)
 {
 	struct vmmap *vmmap;
+	unsigned int i, count;
 
 	vmmap = vmmap_remove(addr);
 	if (vmmap == NULL)
 		return;
-	pmap_qremove(addr, vmmap->vm_size / PAGE_SIZE);
+	count = vmmap->vm_size / PAGE_SIZE;
+	/* Remove every alias owned by this vmap before restoring attributes. */
+	pmap_qremove(addr, count);
+	if (vmmap->vm_attrs != NULL) {
+		mtx_lock(&vmmaplock);
+		for (i = 0; i < count; i++)
+			vmmap_attr_put(vmmap->vm_attrs[i]);
+		mtx_unlock(&vmmaplock);
+		kfree(vmmap->vm_attrs);
+	}
 	kva_free(addr, vmmap->vm_size);
 	kfree(vmmap);
 }
